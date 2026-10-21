@@ -62,6 +62,10 @@ struct SettingsView: View {
     let loginItem: LoginItem
     /// The "Check for updates" button's one request and its report.
     let releases: ReleaseChecker
+    /// Finds nearby network names for the priority list.
+    var scanner: any HotspotScanning = CoreWLANHotspotScanner()
+    /// Finds nearby phones and tablets for the priority list.
+    var nearbyDevices: any NearbyHotspotBrowsing = SharingHotspotBrowser()
 
     @State private var editingApps = false
     @State private var editingHotspot = false
@@ -90,7 +94,9 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $editingApps) { AppsSheet(manager: manager) }
         .sheet(isPresented: $editingHotspot) {
-            HotspotSheet(manager: manager, secrets: secrets, locationPermission: locationPermission)
+            HotspotSheet(
+                manager: manager, secrets: secrets, locationPermission: locationPermission,
+                scanner: scanner, nearbyDevices: nearbyDevices)
         }
         .onChange(of: manager.config.defaultPreset) {
             if !minimalDurationFocused {
@@ -223,7 +229,7 @@ struct SettingsView: View {
     private var networkSection: some View {
         Section("If Wi-Fi drops") {
             LabeledContent {
-                Button(hotspotName.isEmpty ? "Set Up\u{2026}" : "Edit\u{2026}") {
+                Button(hotspotConfigured ? "Edit\u{2026}" : "Set Up\u{2026}") {
                     editingHotspot = true
                 }
             } label: {
@@ -243,12 +249,25 @@ struct SettingsView: View {
 
     private var hotspotName: String { HotspotSSID.normalized(manager.config.hotspotSSID) }
 
+    /// Whether a hotspot is set up: the one name, or with the priority
+    /// list on, any hotspot on the list.
+    private var hotspotConfigured: Bool {
+        manager.config.hotspotPriorityEnabled ? !manager.config.priorityHotspots.isEmpty : !hotspotName.isEmpty
+    }
+
     /// The hotspot set up, or "Not set up", and how many tmux panes an
     /// outage nudges.
     private var hotspotSummary: String {
         let panes = manager.config.tmuxTargets.count
         let nudges = panes == 0 ? "" : ", nudges \(panes) tmux \(panes == 1 ? "pane" : "panes")"
-        return (hotspotName.isEmpty ? "Not set up" : hotspotName) + nudges
+        let hotspots: String
+        if manager.config.hotspotPriorityEnabled {
+            let count = manager.config.priorityHotspots.count
+            hotspots = count == 0 ? "Not set up" : "\(count) \(count == 1 ? "hotspot" : "hotspots") in priority order"
+        } else {
+            hotspots = hotspotName.isEmpty ? "Not set up" : hotspotName
+        }
+        return hotspots + nudges
     }
 
     private var appSection: some View {

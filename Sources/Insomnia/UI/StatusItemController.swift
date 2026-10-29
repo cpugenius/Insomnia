@@ -2111,7 +2111,14 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             foreignSleep: manager.foreignSleepWarning,
             outputsWaiting: manager.outputsWaitingForRestore,
             lidSimulationBuild: LidSimulationBuild.isCompiledIn,
-            remaining: inMenu ? manager.remainingText : nil
+            remaining: inMenu ? manager.remainingText : nil,
+            dailyWindow: DailyWindow.statusLine(
+                enabled: manager.config.dailyWindowEnabled,
+                startMinute: manager.config.dailyWindowStartMinute,
+                endMinute: manager.config.dailyWindowEndMinute,
+                pausedUntil: manager.config.dailyWindowPausedUntil,
+                now: Date()
+            )
         )
     }
 

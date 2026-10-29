@@ -160,6 +160,17 @@ struct Config: Codable, Equatable, Sendable {
     /// typed in that pane.
     var tmuxNudgePressesEnter: Bool = false
 
+    // Daily window. On by default, including a config.json with no keys for
+    // it: 7:00 AM to 2:00 AM local time. The session it starts still has an
+    // end time, so recovery and the backstop are unchanged. `PausedUntil`
+    // is set when the user (or a battery or heat floor) ends a session
+    // early, and cleared once that instant has passed.
+    var dailyWindowEnabled: Bool = true
+    /// Minutes from local midnight, `0..<1440`.
+    var dailyWindowStartMinute: Int = DailyWindow.automaticStart
+    var dailyWindowEndMinute: Int = DailyWindow.automaticEnd
+    var dailyWindowPausedUntil: Date?
+
     // App
     /// Show the live countdown and the hold-to-end ring next to the eye
     /// while a session runs. Off: the eye alone says whether a session is
@@ -292,6 +303,10 @@ struct Config: Codable, Equatable, Sendable {
         nudgeThreshold = try c.decodeIfPresent(TimeInterval.self, forKey: .nudgeThreshold) ?? d.nudgeThreshold
         tmuxTargets = try c.decodeIfPresent([String].self, forKey: .tmuxTargets) ?? d.tmuxTargets
         tmuxNudgePressesEnter = try c.decodeIfPresent(Bool.self, forKey: .tmuxNudgePressesEnter) ?? d.tmuxNudgePressesEnter
+        dailyWindowEnabled = try c.decodeIfPresent(Bool.self, forKey: .dailyWindowEnabled) ?? d.dailyWindowEnabled
+        dailyWindowStartMinute = DailyWindow.clamp(try c.decodeIfPresent(Int.self, forKey: .dailyWindowStartMinute) ?? d.dailyWindowStartMinute)
+        dailyWindowEndMinute = DailyWindow.clamp(try c.decodeIfPresent(Int.self, forKey: .dailyWindowEndMinute) ?? d.dailyWindowEndMinute)
+        dailyWindowPausedUntil = try c.decodeIfPresent(Date.self, forKey: .dailyWindowPausedUntil)
         showMenuBarCountdown = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarCountdown) ?? d.showMenuBarCountdown
         sessionSounds = try c.decodeIfPresent(Bool.self, forKey: .sessionSounds) ?? d.sessionSounds
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin

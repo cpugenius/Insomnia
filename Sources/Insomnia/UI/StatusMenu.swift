@@ -109,7 +109,8 @@ enum StatusMenu {
         foreignSleep: String? = nil,
         outputsWaiting: [SavedAudioOutput] = [],
         lidSimulationBuild: Bool = false,
-        remaining: String? = nil
+        remaining: String? = nil,
+        dailyWindow: String? = nil
     ) -> [Item] {
         var out: [Item] = []
         if sessionActive, let remaining = present(remaining) {
@@ -117,6 +118,9 @@ enum StatusMenu {
         }
         if let held = SleepHeldLine.line(sessionActive: sessionActive, sleepHeld: sleepHeld) {
             out.append(Item(title: held.text, kind: held.isWarning ? .warning : .info))
+        }
+        if let dailyWindow = present(dailyWindow) {
+            out.append(Item(title: dailyWindow, kind: .info))
         }
         if let machine = present(machine) {
             out.append(Item(title: machine, kind: .info))

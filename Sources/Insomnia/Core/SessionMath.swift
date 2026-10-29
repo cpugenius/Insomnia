@@ -19,8 +19,17 @@ enum SessionMath {
     }
 
     /// Fresh session starting now.
-    static func newSession(now: Date, duration: TimeInterval, maxDuration: TimeInterval) -> Session {
-        Session(startedAt: now, endsAt: endsAt(start: now, duration: duration, maxDuration: maxDuration))
+    static func newSession(
+        now: Date,
+        duration: TimeInterval,
+        maxDuration: TimeInterval,
+        source: SessionSource = .manual
+    ) -> Session {
+        Session(
+            startedAt: now,
+            endsAt: endsAt(start: now, duration: duration, maxDuration: maxDuration),
+            source: source
+        )
     }
 
     /// Push `endsAt` out by `extra` seconds, never past `now + maxDuration`.

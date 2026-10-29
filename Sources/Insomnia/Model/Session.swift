@@ -1,5 +1,12 @@
 import Foundation
 
+/// Who asked for the session. A file written before this field existed
+/// decodes as `.manual`.
+enum SessionSource: String, Codable, Equatable, Sendable {
+    case manual
+    case dailyWindow
+}
+
 /// An active keep-awake session. `endsAt` is the only thing that keeps sleep
 /// disabled; everything else is bookkeeping.
 struct Session: Codable, Equatable, Sendable {
@@ -7,11 +14,21 @@ struct Session: Codable, Equatable, Sendable {
     var endsAt: Date
     /// Every extension applied, in order, in seconds.
     var extensions: [TimeInterval]
+    var source: SessionSource
 
-    init(startedAt: Date, endsAt: Date, extensions: [TimeInterval] = []) {
+    init(startedAt: Date, endsAt: Date, extensions: [TimeInterval] = [], source: SessionSource = .manual) {
         self.startedAt = startedAt
         self.endsAt = endsAt
         self.extensions = extensions
+        self.source = source
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        endsAt = try c.decode(Date.self, forKey: .endsAt)
+        extensions = try c.decodeIfPresent([TimeInterval].self, forKey: .extensions) ?? []
+        source = try c.decodeIfPresent(SessionSource.self, forKey: .source) ?? .manual
     }
 
     /// Seconds left until `endsAt`, never negative.

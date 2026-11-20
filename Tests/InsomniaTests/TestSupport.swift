@@ -1005,7 +1005,9 @@ struct Harness {
         sleepGuard: (any SleepGuarding)? = nil,
         displayAssertions: (any DisplayAssertionHolding)? = nil,
         bootSession: String = SignalProcessControl.bootSession,
-        clock customClock: (@Sendable () -> Date)? = nil
+        clock customClock: (@Sendable () -> Date)? = nil,
+        lockedScreenOffMinute: Duration = .seconds(3600),
+        userIdleSeconds: @escaping @Sendable () -> TimeInterval = { 3600 }
     ) -> SessionManager {
         let c = clock
         let lid = clamshell
@@ -1034,6 +1036,8 @@ struct Harness {
             closedLidSleepConfirmDelay: confirmDelay,
             displayNotifications: displayCenter,
             reassertDelay: reassertDelay,
+            lockedScreenOffMinute: lockedScreenOffMinute,
+            userIdleSeconds: userIdleSeconds,
             keptRecheckDelay: keptRecheckDelay,
             keptRecheckAttempts: keptRecheckAttempts,
             keptRecheckSlowDelay: keptRecheckSlowDelay,

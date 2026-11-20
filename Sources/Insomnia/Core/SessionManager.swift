@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -458,6 +459,12 @@ final class SessionManager {
     /// written once more. powerd re-applies its own remembered brightness
     /// asynchronously after the wake and can override the first write.
     private let reassertDelay: Duration
+    /// One minute of `Config.screenOffAfterLockMinutes`. Tests shorten it.
+    private let lockedScreenOffMinute: Duration
+    /// Seconds since the last keyboard, mouse or trackpad input. Read when
+    /// the locked-screen delay runs out, so a display someone is typing a
+    /// password into is not turned off under them.
+    private let userIdleSeconds: @Sendable () -> TimeInterval
     /// The pending second write of a display/keyboard restore. One at a
     /// time: the next restore cancels it, and a lid close that darkened
     /// again in the meantime makes it skip (see undoLidActionsInJournal).
@@ -562,7 +569,11 @@ final class SessionManager {
     /// session's pause. A lid closed at a desk (`LidReading.closedAtDesk`)
     /// reads open then, and one whose display list cannot be read closed.
     /// Every end clears it.
-    @ObservationIgnored private var countdownPaused = false
+    @ObservationIgnored private var countdownPaused = false {
+        // A lid close hands the locked display to the lid actions and a lid
+        // open hands it back, so the locked-screen delay starts again.
+        didSet { if oldValue != countdownPaused, screenLocked { syncScreenAwake() } }
+    }
     /// Whether the session takes the lid as closed: set when it becomes
     /// active and by each lid event since. The lid observer starts from it.
     var lidTakenAsClosed: Bool { countdownPaused }
@@ -682,6 +693,10 @@ final class SessionManager {
         closedLidSleepConfirmDelay: TimeInterval = LidObserver.debounce,
         displayNotifications: NotificationCenter = .default,
         reassertDelay: Duration = .seconds(2),
+        lockedScreenOffMinute: Duration = .seconds(60),
+        userIdleSeconds: @escaping @Sendable () -> TimeInterval = {
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: UInt32.max)!)
+        },
         keptRecheckDelay: Duration = .seconds(3),
         keptRecheckAttempts: Int = 20,
         keptRecheckSlowDelay: Duration = .seconds(60),
@@ -712,6 +727,8 @@ final class SessionManager {
         self.closedLidSleepConfirmDelay = closedLidSleepConfirmDelay
         self.displayNotifications = displayNotifications
         self.reassertDelay = reassertDelay
+        self.lockedScreenOffMinute = lockedScreenOffMinute
+        self.userIdleSeconds = userIdleSeconds
         self.keptRecheckDelay = keptRecheckDelay
         self.keptRecheckAttempts = keptRecheckAttempts
         self.keptRecheckSlowDelay = keptRecheckSlowDelay
@@ -821,7 +838,8 @@ final class SessionManager {
     /// anything else in place. Once the hold matches again, that menu line
     /// goes if it is still the line shown; a newer failure stays.
     func syncScreenAwake() {
-        if isActive, config.keepScreenAwake, !endRequestedSinceStart, let endsAt = session?.endsAt {
+        syncLockedScreenOff()
+        if isActive, config.keepScreenAwake, !endRequestedSinceStart, !lockedScreenOff, let endsAt = session?.endsAt {
             if screenAwake.hold(until: endsAt, now: clock()) {
                 clearScreenAwakeFailure()
             } else {
@@ -833,6 +851,86 @@ final class SessionManager {
             reportScreenAwakeFailure(Self.screenAwakeReleaseFailure)
         }
     }
+
+    // MARK: Locked screen off
+
+    /// Whether the login session's screen is locked (`ScreenLockObserver`).
+    /// Kept across sessions: it is the session's lock, not Insomnia's.
+    @ObservationIgnored private var screenLocked = false
+    /// The wait for `Config.screenOffAfterLockMinutes`, and the minutes it
+    /// was armed with, so a change in Settings starts it again.
+    @ObservationIgnored private var lockedScreenOffTask: Task<Void, Never>?
+    @ObservationIgnored private var lockedScreenOffArmedMinutes = 0
+    /// True once the screen has been locked with the lid open for
+    /// `Config.screenOffAfterLockMinutes`: the display hold is let go, so
+    /// macOS turns the display off as it would without Insomnia. Cleared
+    /// by an unlock, a lid close, the session's end or the toggle.
+    @ObservationIgnored private(set) var lockedScreenOff = false
+
+    /// The screen locked or unlocked. An unlock takes the display hold back
+    /// at once; a lock starts the wait to let it go.
+    func screenLockChanged(_ locked: Bool) {
+        guard screenLocked != locked else { return }
+        screenLocked = locked
+        Log.info("screen \(locked ? "locked" : "unlocked")")
+        syncScreenAwake()
+    }
+
+    /// Nothing drives a locked screen: agents that work through the screen
+    /// wait at the lock screen for a sign-in. So while the display is held
+    /// and the screen is locked with the lid open, the hold is let go once
+    /// `Config.screenOffAfterLockMinutes` pass, and the display is asked to
+    /// turn off. With the lid closed the lid actions own the display (0
+    /// brightness, no display sleep), and the wait starts again at the open.
+    private func syncLockedScreenOff() {
+        let minutes = config.screenOffAfterLockMinutes
+        let wanted = isActive && config.keepScreenAwake && !endRequestedSinceStart
+            && screenLocked && !countdownPaused && minutes > 0
+        guard wanted else {
+            lockedScreenOffTask?.cancel()
+            lockedScreenOffTask = nil
+            if lockedScreenOff {
+                lockedScreenOff = false
+                Log.info("screen awake: the locked-screen wait is over, the display is held again")
+            }
+            return
+        }
+        guard !lockedScreenOff else { return }
+        if lockedScreenOffTask != nil, lockedScreenOffArmedMinutes == minutes { return }
+        lockedScreenOffTask?.cancel()
+        lockedScreenOffArmedMinutes = minutes
+        let delay = lockedScreenOffMinute * minutes
+        lockedScreenOffTask = Task { [weak self] in
+            do { try await Task.sleep(for: delay) } catch { return }
+            self?.lockedScreenOffElapsed()
+        }
+    }
+
+    private func lockedScreenOffElapsed() {
+        guard !Task.isCancelled else { return }
+        lockedScreenOffTask = nil
+        lockedScreenOff = true
+        let minutes = config.screenOffAfterLockMinutes
+        Log.info("screen awake: locked for \(minutes) min with the lid open; display hold let go")
+        syncScreenAwake()
+        // A refused release keeps the display on; the menu already says so.
+        guard !screenAwake.isHeld else { return }
+        let idle = userIdleSeconds()
+        guard idle >= Self.lockedScreenOffQuietSeconds else {
+            Log.info("screen awake: input \(Int(idle)) s ago at the lock screen; display left to idle off on its own")
+            return
+        }
+        do {
+            try display.requestSleep()
+            Log.info("screen awake: display asked to turn off at the lock screen")
+        } catch {
+            Log.error("screen awake: display sleep request at the lock screen failed: \(error.localizedDescription); it idles off on its own")
+        }
+    }
+
+    /// Input this recent at the lock screen means someone is there, so the
+    /// display is not turned off under them; macOS idles it off later.
+    static let lockedScreenOffQuietSeconds: TimeInterval = 10
 
     /// The screen awake failure last put in the menu, until a hold or a
     /// release works again.

@@ -506,3 +506,194 @@ final class SessionScreenAwakeTests: XCTestCase {
         XCTAssertNil(m.lastError)
     }
 }
+
+/// A locked screen lets the hold go after `Config.screenOffAfterLockMinutes`
+/// (`SessionManager.syncLockedScreenOff`) and asks the display to turn off;
+/// an unlock, a lid close or the session's end takes it back. One "minute"
+/// is 20 ms here.
+@MainActor
+final class LockedScreenOffTests: XCTestCase {
+    var h: Harness!
+    var fake: FakeDisplayAssertions!
+    /// Seconds since the last input, as the manager reads it.
+    final class Idle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _seconds: TimeInterval = 3600
+        var seconds: TimeInterval {
+            get { lock.withLock { _seconds } }
+            set { lock.withLock { _seconds = newValue } }
+        }
+    }
+    var idle: Idle!
+
+    override func setUp() async throws {
+        h = Harness()
+        fake = FakeDisplayAssertions()
+        idle = Idle()
+    }
+
+    override func tearDown() async throws {
+        h.home.destroy()
+    }
+
+    private func make(minutes: Int = 2) -> SessionManager {
+        let m = h.makeManager(
+            displayAssertions: fake,
+            lockedScreenOffMinute: .milliseconds(20),
+            userIdleSeconds: { [idle] in idle!.seconds }
+        )
+        m.config.keepScreenAwake = true
+        m.config.screenOffAfterLockMinutes = minutes
+        return m
+    }
+
+    private func waitUntil(_ timeout: TimeInterval = 2, _ condition: @MainActor () -> Bool) async -> Bool {
+        let end = Date().addingTimeInterval(timeout)
+        while Date() < end {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return condition()
+    }
+
+    private func settle() async {
+        try? await Task.sleep(for: .milliseconds(150))
+    }
+
+    func testALockLetsTheHoldGoAfterTheDelayAndTurnsTheDisplayOff() async {
+        let m = make()
+        await m.start(duration: 3600)
+        XCTAssertTrue(m.screenAwakeHeld)
+
+        m.screenLockChanged(true)
+        XCTAssertTrue(m.screenAwakeHeld, "the display stays on for the delay")
+
+        let released = await waitUntil { !m.screenAwakeHeld }
+        XCTAssertTrue(released)
+        XCTAssertTrue(m.lockedScreenOff)
+        XCTAssertEqual(fake.released, [41])
+        XCTAssertEqual(h.display.sleepRequests, 1)
+        XCTAssertNil(m.lastError)
+    }
+
+    func testAnUnlockTakesTheHoldBack() async {
+        let m = make()
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+        _ = await waitUntil { !m.screenAwakeHeld }
+
+        m.screenLockChanged(false)
+
+        XCTAssertTrue(m.screenAwakeHeld)
+        XCTAssertFalse(m.lockedScreenOff)
+        XCTAssertEqual(fake.created.count, 2, "a new hold for the rest of the session")
+        XCTAssertEqual(fake.timeouts.last, 3600)
+    }
+
+    func testAnUnlockBeforeTheDelayKeepsTheHold() async {
+        let m = make(minutes: 5)
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+        m.screenLockChanged(false)
+
+        await settle()
+
+        XCTAssertTrue(m.screenAwakeHeld)
+        XCTAssertEqual(fake.released, [])
+        XCTAssertEqual(h.display.sleepRequests, 0)
+    }
+
+    func testNeverKeepsALockedScreenLit() async {
+        let m = make(minutes: 0)
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+
+        await settle()
+
+        XCTAssertTrue(m.screenAwakeHeld)
+        XCTAssertEqual(h.display.sleepRequests, 0)
+    }
+
+    /// Input at the lock screen when the delay runs out: the hold goes, but
+    /// the display is not turned off under the person typing.
+    func testRecentInputLetsTheHoldGoWithoutTurningTheDisplayOff() async {
+        idle.seconds = 2
+        let m = make()
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+
+        let released = await waitUntil { !m.screenAwakeHeld }
+
+        XCTAssertTrue(released)
+        XCTAssertEqual(h.display.sleepRequests, 0)
+    }
+
+    /// With the lid closed the lid actions own the display; the wait
+    /// starts again when the lid opens behind the lock.
+    func testALidCloseKeepsTheHoldAndTheOpenStartsTheWaitAgain() async {
+        let m = make()
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+        _ = await waitUntil { !m.screenAwakeHeld }
+
+        m.pauseCountdown()
+        XCTAssertTrue(m.screenAwakeHeld, "a closed lid holds the display again")
+        await settle()
+        XCTAssertTrue(m.screenAwakeHeld, "no wait runs while the lid is closed")
+
+        m.resumeCountdown()
+        XCTAssertTrue(m.screenAwakeHeld, "the open starts the wait again")
+        let released = await waitUntil { !m.screenAwakeHeld }
+        XCTAssertTrue(released)
+        XCTAssertEqual(h.display.sleepRequests, 2)
+    }
+
+    /// The app starts behind a locked screen: a session started then waits
+    /// from its start.
+    func testASessionStartedWhileLockedWaitsFromItsStart() async {
+        let m = make()
+        m.screenLockChanged(true)
+
+        await m.start(duration: 3600)
+        XCTAssertTrue(m.screenAwakeHeld)
+
+        let released = await waitUntil { !m.screenAwakeHeld }
+        XCTAssertTrue(released)
+    }
+
+    func testTheEndCancelsTheWait() async {
+        let m = make(minutes: 5)
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+
+        await m.end(reason: .user)
+        await settle()
+
+        XCTAssertFalse(m.lockedScreenOff)
+        XCTAssertEqual(h.display.sleepRequests, 0, "no display sleep after the session ended")
+    }
+
+    /// With the toggle off nothing is held, so nothing waits.
+    func testWithTheToggleOffALockDoesNothing() async {
+        let m = make()
+        m.config.keepScreenAwake = false
+        await m.start(duration: 3600)
+        m.screenLockChanged(true)
+
+        await settle()
+
+        XCTAssertFalse(m.lockedScreenOff)
+        XCTAssertEqual(fake.created, [])
+        XCTAssertEqual(h.display.sleepRequests, 0)
+    }
+
+    /// Only the state at launch: posting the real notifications would reach
+    /// every app on this Mac.
+    func testTheObserverReportsTheStateAtLaunch() async {
+        let center = DistributedNotificationCenter.default()
+        var seen: [Bool] = []
+        let observer = ScreenLockObserver(center: center, lockedNow: { true }) { seen.append($0) }
+        XCTAssertEqual(seen, [true])
+        withExtendedLifetime(observer) {}
+    }
+}

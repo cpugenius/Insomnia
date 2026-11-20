@@ -47,6 +47,20 @@ final class ConfigTests: XCTestCase {
     /// key existed, or without it, keeps it off; an explicit true is honoured.
     /// Keeping the screen awake leaves the Mac unlocked, so it is opt-in: a
     /// config.json without the key keeps it off; an explicit true is honoured.
+    /// A locked screen goes dark 2 minutes after the lock by default, also
+    /// for a config.json without the key; Never (0) survives a save.
+    func testScreenOffAfterLockDefaultsToTwoMinutesAndKeepsNever() throws {
+        XCTAssertEqual(Config().screenOffAfterLockMinutes, 2)
+        let legacy = try Store.makeDecoder().decode(Config.self, from: Data(#"{"keepScreenAwake": true}"#.utf8))
+        XCTAssertEqual(legacy.screenOffAfterLockMinutes, 2)
+        var never = Config()
+        never.screenOffAfterLockMinutes = 0
+        let data = try Store.makeEncoder().encode(never)
+        XCTAssertEqual(try Store.makeDecoder().decode(Config.self, from: data).screenOffAfterLockMinutes, 0)
+        let negative = try Store.makeDecoder().decode(Config.self, from: Data(#"{"screenOffAfterLockMinutes": -3}"#.utf8))
+        XCTAssertEqual(negative.screenOffAfterLockMinutes, 0, "a negative value reads as Never")
+    }
+
     func testKeepScreenAwakeDecodesAndDefaultsOff() throws {
         XCTAssertFalse(Config().keepScreenAwake)
         let legacy = try Store.makeDecoder().decode(Config.self, from: Data(#"{"tmuxTargets": ["agents:0.0"]}"#.utf8))

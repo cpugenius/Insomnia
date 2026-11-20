@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: StatusItemController?
     private var settingsWindow: SettingsWindow?
     private var displaySleep: DisplaySleepObserver?
+    private var screenLock: ScreenLockObserver?
     private var timeChange: TimeChangeObserver?
     private let sessionCommands = SessionCommandWatcher()
     private var terminating = false
@@ -100,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             playSessionSound: { SessionSounds.shared.play($0) }
         )
         displaySleep = DisplaySleepObserver { [manager] asleep in manager.displaysAsleepChanged(asleep) }
+        screenLock = ScreenLockObserver { [manager] locked in manager.screenLockChanged(locked) }
         timeChange = TimeChangeObserver { [manager] in manager.refreshCountdown() }
         sessionCommands.onRequest = { [manager] request in
             Task { await manager.serve(request) }

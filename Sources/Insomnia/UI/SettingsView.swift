@@ -115,6 +115,24 @@ struct SettingsView: View {
     /// Under the keep-awake toggle.
     static let keepScreenAwakeNote = "Off by default. When on, the display never turns off on its own during a session, so the screen saver never starts and the screen never locks while idle, and agents that drive the screen keep working. With the lid closed the display goes to brightness 0 instead of sleeping. \"Lock the screen\" under When the lid closes still locks it at a lid close. When the session ends, idle display sleep and the lock come back. Anyone who opens the Mac during the session finds it unlocked, unless a lid close locked it."
 
+    /// Under the locked-screen picker.
+    static let screenOffAfterLockNote = "With the screen kept on, how long a locked screen stays lit before Insomnia lets the display turn off. Lock with Control-Command-Q, or let a lid close lock it. Unlocking keeps the screen on again. With the lid closed the display stays at brightness 0, and the wait starts again when you open it. Never keeps a locked screen lit until the session ends."
+
+    /// The picker's choices, with a value set in config.json by hand kept
+    /// so the picker shows it.
+    static func screenOffAfterLockChoices(keeping current: Int) -> [Int] {
+        let choices = Config.screenOffAfterLockChoices
+        return choices.contains(current) ? choices : (choices + [current]).sorted()
+    }
+
+    static func screenOffAfterLockLabel(_ minutes: Int) -> String {
+        switch minutes {
+        case 0: "Never"
+        case 1: "1 minute"
+        default: "\(minutes) minutes"
+        }
+    }
+
     /// Under the mute toggle and in the README. Apple Platform Security,
     /// "Hardware microphone disconnect".
     nonisolated static let microphoneNote =
@@ -325,6 +343,16 @@ struct SettingsView: View {
             Toggle("Keep the screen on and unlocked", isOn: manager.binding(\.keepScreenAwake))
                 .onChange(of: manager.config.keepScreenAwake) { manager.syncScreenAwake() }
             Text(Self.keepScreenAwakeNote)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Picker("Turn the display off after locking", selection: manager.binding(\.screenOffAfterLockMinutes)) {
+                ForEach(Self.screenOffAfterLockChoices(keeping: manager.config.screenOffAfterLockMinutes), id: \.self) { minutes in
+                    Text(Self.screenOffAfterLockLabel(minutes)).tag(minutes)
+                }
+            }
+            .disabled(!manager.config.keepScreenAwake)
+            .onChange(of: manager.config.screenOffAfterLockMinutes) { manager.syncScreenAwake() }
+            Text(Self.screenOffAfterLockNote)
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Toggle(isOn: manager.binding(\.sessionSounds)) {

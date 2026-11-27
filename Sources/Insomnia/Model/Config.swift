@@ -57,6 +57,15 @@ struct Config: Codable, Equatable, Sendable {
     /// opens the Mac during such a session finds it unlocked, unless a lid
     /// close locked it.
     var keepScreenAwake: Bool = false
+    /// With `keepScreenAwake` on, minutes the screen stays locked with the
+    /// lid open before the hold is let go and the display is turned off
+    /// (`SessionManager.syncLockedScreenOff`). 0 is Never: a locked screen
+    /// stays lit until the session ends. 2 by default and for a config.json
+    /// without the key: nothing drives a locked screen, so a lit one only
+    /// spends power and shows the lock screen.
+    var screenOffAfterLockMinutes: Int = 2
+    /// The choices Settings offers for `screenOffAfterLockMinutes`.
+    static let screenOffAfterLockChoices = [0, 1, 2, 5, 10, 15, 30]
 
     // Lid-close actions
     /// Bundle ids to SIGSTOP while the lid is closed.
@@ -256,6 +265,7 @@ struct Config: Codable, Equatable, Sendable {
         countdownStyle = (try? c.decodeIfPresent(CountdownStyle.self, forKey: .countdownStyle)) ?? d.countdownStyle
         maxDuration = try c.decodeIfPresent(TimeInterval.self, forKey: .maxDuration) ?? d.maxDuration
         keepScreenAwake = try c.decodeIfPresent(Bool.self, forKey: .keepScreenAwake) ?? d.keepScreenAwake
+        screenOffAfterLockMinutes = max(0, try c.decodeIfPresent(Int.self, forKey: .screenOffAfterLockMinutes) ?? d.screenOffAfterLockMinutes)
         freezeList = try c.decodeIfPresent([String].self, forKey: .freezeList) ?? d.freezeList
         freezeAllApps = try c.decodeIfPresent(Bool.self, forKey: .freezeAllApps) ?? d.freezeAllApps
         dockerRule = try c.decodeIfPresent(Bool.self, forKey: .dockerRule) ?? d.dockerRule

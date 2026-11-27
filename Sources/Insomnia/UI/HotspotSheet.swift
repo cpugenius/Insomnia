@@ -9,6 +9,10 @@ struct HotspotSheet: View {
     let manager: SessionManager
     let secrets: any HotspotSecretStore
     let locationPermission: LocationPermission
+    /// Finds nearby network names for the priority list.
+    var scanner: any HotspotScanning = CoreWLANHotspotScanner()
+    /// Finds nearby phones and tablets for the priority list.
+    var nearbyDevices: any NearbyHotspotBrowsing = SharingHotspotBrowser()
 
     @Environment(\.dismiss) private var dismiss
     /// The password field, saving, what was saved, and the notice under
@@ -21,6 +25,7 @@ struct HotspotSheet: View {
     var body: some View {
         Form {
             hotspotSection
+            joinTimingSection
             tmuxSection
         }
         .formStyle(.grouped)
@@ -53,33 +58,19 @@ struct HotspotSheet: View {
 
     private var hotspotSection: some View {
         Section {
-            TextField(
-                "Hotspot name", text: manager.binding(\.hotspotSSID),
-                prompt: Text("Choose or type a name")
-            )
-            .textInputSuggestions {
-                ForEach(suggestions, id: \.self) { name in
-                    Label(name, systemImage: "wifi")
-                        .textInputCompletion(name)
-                }
-            }
-            LabeledContent("Password") {
-                HStack {
-                    SecureField(
-                        "Password",
-                        text: Binding(get: { hotspot.password }, set: { hotspot.edit($0) }),
-                        prompt: Text("Required")
-                    )
-                    .labelsHidden()
-                    .onSubmit(savePassword)
-                    Button(
-                        hotspot.buttonTitle(ssid: manager.config.hotspotSSID),
-                        action: savePassword)
-                        .disabled(hotspot.password.isEmpty || hotspot.saving)
-                }
-            }
-            if let notice = hotspot.notice {
-                Text(notice).font(.caption).foregroundStyle(.orange)
+            Toggle("Join several hotspots in priority order", isOn: hotspotPriority)
+                .onChange(of: manager.config.hotspotPriorityEnabled) { manager.services?.hotspotSettingsChanged() }
+            if manager.config.hotspotPriorityEnabled {
+                PriorityHotspotList(
+                    manager: manager,
+                    secrets: secrets,
+                    locationPermission: locationPermission,
+                    scanner: scanner,
+                    devices: nearbyDevices,
+                    update: { manager.updateConfig($0) }
+                )
+            } else {
+                singleHotspotRows
             }
             LabeledContent {
                 locationAccess
@@ -95,8 +86,63 @@ struct HotspotSheet: View {
             Text("iPhone hotspot")
         } footer: {
             Text(
-                "If Wi-Fi drops during a session, Insomnia joins this hotspot. The password stays "
-                    + "in your login keychain; after a reinstall, enter it again.")
+                "If Wi-Fi drops during a session, Insomnia joins this hotspot, or with the priority list "
+                    + "on, the highest one on the list in range. Passwords stay in your login keychain; "
+                    + "after a reinstall, enter them again.")
+        }
+    }
+
+    /// Turning the list on starts it with the hotspot above, if there is
+    /// one and the list is empty (`Config.setHotspotPriority`).
+    private var hotspotPriority: Binding<Bool> {
+        Binding(
+            get: { manager.config.hotspotPriorityEnabled },
+            set: { on in manager.updateConfig { $0.setHotspotPriority(on) } }
+        )
+    }
+
+    private var joinTimingSection: some View {
+        Section {
+            Toggle(isOn: manager.binding(\.aggressiveHotspotJoin)) {
+                Text("Join a hotspot as soon as Wi-Fi drops (aggressive)")
+                Text(
+                    "Off, Insomnia first gives macOS 20 seconds to rejoin the Wi-Fi network it dropped, "
+                        + "so a blip at home does not wake your hotspot. When a hotspot Insomnia joined "
+                        + "drops, the next one is joined after 5 seconds either way.")
+            }
+        }
+    }
+
+    /// The one hotspot's name and password, with the priority list off.
+    @ViewBuilder
+    private var singleHotspotRows: some View {
+        TextField(
+            "Hotspot name", text: manager.binding(\.hotspotSSID),
+            prompt: Text("Choose or type a name")
+        )
+        .textInputSuggestions {
+            ForEach(suggestions, id: \.self) { name in
+                Label(name, systemImage: "wifi")
+                    .textInputCompletion(name)
+            }
+        }
+        LabeledContent("Password") {
+            HStack {
+                SecureField(
+                    "Password",
+                    text: Binding(get: { hotspot.password }, set: { hotspot.edit($0) }),
+                    prompt: Text("Required")
+                )
+                .labelsHidden()
+                .onSubmit(savePassword)
+                Button(
+                    hotspot.buttonTitle(ssid: manager.config.hotspotSSID),
+                    action: savePassword)
+                    .disabled(hotspot.password.isEmpty || hotspot.saving)
+            }
+        }
+        if let notice = hotspot.notice {
+            Text(notice).font(.caption).foregroundStyle(.orange)
         }
     }
 

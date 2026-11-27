@@ -168,7 +168,9 @@ General holds the display awake during a session, like `caffeinate -d`, so the
 screen saver never starts and the screen never locks while idle. With the lid
 closed, the display goes to brightness 0 instead of sleeping. **Lock the
 screen** under When the lid closes still locks the screen when you close the
-lid. When the session ends or Insomnia quits or crashes, macOS drops the hold,
+lid. A locked screen goes dark after **Turn the display off after locking**
+(2 minutes by default, or Never), and unlocking keeps it on again. When the
+session ends or Insomnia quits or crashes, macOS drops the hold,
 and the display sleeps and locks as before. Insomnia never changes the lock
 setting. The switch is off by default because anyone who opens the Mac during a
 session finds it unlocked, unless a lid close locked it.

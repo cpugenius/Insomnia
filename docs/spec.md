@@ -223,6 +223,17 @@ recovery; newly written journals use `frozenProcesses`.
   drops it when the app quits or crashes, and the backstop has nothing to
   undo. The lock setting is never read or written. Lid close then darkens
   without asking the display to sleep (section 4).
+- Nothing drives a locked screen, so a locked screen does not stay lit
+  for the whole session. `ScreenLockObserver` reports
+  `com.apple.screenIsLocked` and `com.apple.screenIsUnlocked` (and the
+  state at launch, `CGSSessionScreenIsLocked`). Once the screen has been
+  locked with the lid open for "Turn the display off after locking"
+  (`screenOffAfterLockMinutes`, default 2, 0 is Never), `SessionManager`
+  lets the hold go and asks the display to sleep, unless there was input
+  in the last 10 s, when macOS idles it off on its own. An unlock, a lid
+  close (the lid actions own the display then) or the session's end
+  takes the hold back or drops the wait; a lid open behind the lock
+  starts the wait again.
 
 ### 3. Lid observer
 
@@ -1476,6 +1487,9 @@ older build is tightened when the app reads it:
   the chosen style. With Minimal chosen the row is greyed out and its line
   says the switch does nothing there (section 11, One-click start).
 - keep the screen on and unlocked on/off (default off; section 2)
+- turn the display off after locking: Never, 1, 2, 5, 10, 15 or 30
+  minutes (`screenOffAfterLockMinutes`, default 2, also for a config.json
+  without the key), greyed out while the screen is not kept on (section 2)
 - play a sound when you start or end a session (`sessionSounds`), default
   off, also for a config.json without the key. Off, Insomnia generates,
   loads and plays nothing. On, a start or an end asked for in the menu bar

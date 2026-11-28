@@ -175,6 +175,12 @@ and the display sleeps and locks as before. Insomnia never changes the lock
 setting. The switch is off by default because anyone who opens the Mac during a
 session finds it unlocked, unless a lid close locked it.
 
+Insomnia also keeps the Mac awake from 7:00 AM to 2:00 AM every day, and
+lets it sleep from 2:00 AM to 7:00 AM. That window is on unless you turn it
+off in Settings. The hours are local time, and you can change them. End the
+session early and the window stays off until its next start. It only runs
+while Insomnia is open, so turn on Launch at login if the Mac restarts.
+
 On battery power, Insomnia turns on Low Power Mode below 40% and ends the
 session below 10%. Those are the defaults. You can change both in Settings,
 and an end floor of 0 turns the battery end off. The heat rules turn on Low Power

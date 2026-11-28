@@ -189,6 +189,27 @@ recovery; newly written journals use `frozenProcesses`.
   bundle declares the interface as `InsomniaSessionCommandVersion` in its
   Info.plist, because an older build opens the menu bar app instead.
 
+### 1a. Daily window
+
+On by default, including a config.json that has no `dailyWindowEnabled` key.
+From 7:00 AM to 2:00 AM local time Insomnia keeps an ordinary session whose
+`endsAt` is the next 2:00 AM. From 2:00 AM to 7:00 AM it does not start one.
+Sleep is still disabled only while that session exists, so the backstop, the
+battery floors and End now behave as they do for a session started by hand.
+The session's `source` is `dailyWindow`; a file written before that field
+decodes as `manual`.
+
+Ending a session from End now, the battery floor, or critical heat pauses
+the window until the next start (7:00 AM with the default hours). A relaunch
+during the pause does not start it. Settings can resume it, change the
+hours, or turn it off. A session already running keeps its end time when the
+hours change. Quit ends the session and does not schedule the next morning;
+the window starts again the next time Insomnia is running inside the hours.
+The app has to be running at the start time. Launch at login covers a restart.
+
+Less than 60 seconds left in the window does not start a session. The
+minimum session length would otherwise push `endsAt` past the end minute.
+
 ### 2. Sleep guard and root access
 
 - `install.sh` writes `/etc/sudoers.d/insomnia` allowing the user to run,

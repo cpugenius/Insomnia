@@ -392,6 +392,12 @@ final class ReconcileTests: XCTestCase {
             clamshell: { false },
             clock: { Date() }
         )
+        // This manager is built on an empty home, so it saves the product
+        // defaults, including the daily window. That window is in force at
+        // the wall clock this test runs on, and would start another session
+        // the moment this one ends. The deadline is what is under test.
+        m.config.dailyWindowEnabled = false
+        try m.store.saveConfig(m.config)
         // Bypass clamping by writing a near-expired session and reconciling.
         // session.json keeps whole seconds, so a fractional deadline would
         // come back up to a second earlier than written.

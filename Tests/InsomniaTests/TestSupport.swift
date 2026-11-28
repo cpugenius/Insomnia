@@ -1012,6 +1012,16 @@ struct Harness {
         let c = clock
         let lid = clamshell
         let table = processes
+        // The product default is on (7:00 AM–2:00 AM). An empty home would
+        // otherwise start that session on the first reconcile, at whatever
+        // local time the test clock falls in. Write it off first. A config
+        // the test already saved is left as it is.
+        try? home.paths.createDirectories()
+        if (try? store.loadConfig()) == nil {
+            var heldOff = Config()
+            heldOff.dailyWindowEnabled = false
+            try? store.saveConfig(heldOff)
+        }
         return SessionManager(
             paths: home.paths,
             sleepGuard: sleepGuard ?? guardFake,

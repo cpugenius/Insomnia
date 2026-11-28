@@ -74,6 +74,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            dailyWindowSection
             lidSection
             agentSection
             powerSection
@@ -114,6 +115,66 @@ struct SettingsView: View {
 
     /// Under the keep-awake toggle.
     static let keepScreenAwakeNote = "Off by default. When on, the display never turns off on its own during a session, so the screen saver never starts and the screen never locks while idle, and agents that drive the screen keep working. With the lid closed the display goes to brightness 0 instead of sleeping. \"Lock the screen\" under When the lid closes still locks it at a lid close. When the session ends, idle display sleep and the lock come back. Anyone who opens the Mac during the session finds it unlocked, unless a lid close locked it."
+
+    private var dailyWindowEnabled: Binding<Bool> {
+        Binding(
+            get: { manager.config.dailyWindowEnabled },
+            set: { on in
+                guard manager.config.dailyWindowEnabled != on else { return }
+                manager.updateConfig { config in
+                    config.dailyWindowEnabled = on
+                    if !on { config.dailyWindowPausedUntil = nil }
+                }
+                Task { await manager.syncDailyWindow() }
+            }
+        )
+    }
+
+    private func dailyWindowMinute(_ keyPath: WritableKeyPath<Config, Int>) -> Binding<Date> {
+        Binding(
+            get: {
+                DailyWindow.boundary(manager.config[keyPath: keyPath], on: Date(), calendar: .current) ?? Date()
+            },
+            set: { newValue in
+                let minute = DailyWindow.minute(of: newValue, calendar: .current)
+                guard manager.config[keyPath: keyPath] != minute else { return }
+                manager.updateConfig { $0[keyPath: keyPath] = minute }
+                Task { await manager.syncDailyWindow() }
+            }
+        )
+    }
+
+    private func resumeDailyWindow() {
+        guard manager.config.dailyWindowPausedUntil != nil else { return }
+        manager.updateConfig { $0.dailyWindowPausedUntil = nil }
+        Task { await manager.syncDailyWindow() }
+    }
+
+    /// The daily window: a session from the start time to the end time
+    /// every day (`DailyWindow`).
+    private var dailyWindowSection: some View {
+        Section("Every day") {
+            Toggle("Keep awake every day", isOn: dailyWindowEnabled)
+                .help("Starts a session at the start time and lets it end at the end time")
+            if manager.config.dailyWindowEnabled {
+                DatePicker("From", selection: dailyWindowMinute(\.dailyWindowStartMinute), displayedComponents: .hourAndMinute)
+                DatePicker("Until", selection: dailyWindowMinute(\.dailyWindowEndMinute), displayedComponents: .hourAndMinute)
+                Text(DailyWindow.settingsNote(
+                    startMinute: manager.config.dailyWindowStartMinute,
+                    endMinute: manager.config.dailyWindowEndMinute
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                if let paused = manager.config.dailyWindowPausedUntil, paused > Date() {
+                    LabeledContent("Paused") {
+                        Text("Until \(paused.formatted(date: .omitted, time: .shortened))")
+                            .foregroundStyle(.secondary)
+                    }
+                    Button("Resume now", action: resumeDailyWindow)
+                }
+            }
+        }
+    }
 
     /// Under the locked-screen picker.
     static let screenOffAfterLockNote = "With the screen kept on, how long a locked screen stays lit before Insomnia lets the display turn off. Lock with Control-Command-Q, or let a lid close lock it. Unlocking keeps the screen on again. With the lid closed the display stays at brightness 0, and the wait starts again when you open it. Never keeps a locked screen lit until the session ends."

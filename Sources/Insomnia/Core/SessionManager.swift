@@ -413,6 +413,10 @@ final class SessionManager {
 
     /// Fire date of the single deadline timer, exposed for tests and the menu.
     private(set) var scheduledDeadline: Date?
+    /// When the daily window next re-evaluates. Nil while it is idle or a
+    /// session it started is already running (that session's deadline ends it).
+    @ObservationIgnored private(set) var dailyWindowCheckAt: Date?
+    @ObservationIgnored private var dailyWindowTimer: Timer?
 
     let store: Store
     let paths: Paths
@@ -1488,14 +1492,15 @@ final class SessionManager {
     /// setting may have been applied before the error or timeout), so it is
     /// undone from the journal like an end, and the journal keeps the entry
     /// until that undo is confirmed.
-    func start(duration: TimeInterval) async {
-        _ = await tryStart(duration: duration)
+    /// `source` records who asked. The daily window passes `.dailyWindow`.
+    func start(duration: TimeInterval, source: SessionSource = .manual) async {
+        _ = await tryStart(duration: duration, source: source)
     }
 
     /// `start`, returning whether this call started the session: false when
     /// it was ignored, refused, abandoned or failed (`SessionCommand`
     /// reports it).
-    func tryStart(duration: TimeInterval) async -> Bool {
+    func tryStart(duration: TimeInterval, source: SessionSource = .manual) async -> Bool {
         guard !quitRequested else {
             Log.info("start ignored: quit requested")
             return false
@@ -1505,7 +1510,7 @@ final class SessionManager {
             return false
         }
         let ticket = endTicket
-        let started = await exclusive("start") { await self.performStart(duration: duration, ticket: ticket) }
+        let started = await exclusive("start") { await self.performStart(duration: duration, source: source, ticket: ticket) }
         // A start that goes through before a refused launch reconcile runs
         // again drops that reconcile, and takes over its check.
         await settleEarlierCommand()
@@ -1513,7 +1518,7 @@ final class SessionManager {
         return false
     }
 
-    private func performStart(duration: TimeInterval, ticket: Int) async -> Bool {
+    private func performStart(duration: TimeInterval, source: SessionSource, ticket: Int) async -> Bool {
         guard session == nil else {
             Log.info("start ignored: session already active")
             return false
@@ -1531,7 +1536,7 @@ final class SessionManager {
         // The person wants the Mac awake now.
         dropClosedLidSleep()
         let now = clock()
-        let new = SessionMath.newSession(now: now, duration: duration, maxDuration: config.maxDuration)
+        let new = SessionMath.newSession(now: now, duration: duration, maxDuration: config.maxDuration, source: source)
         // What was on disk before this attempt, read under the lock. A
         // rollback puts exactly this back: an entry an earlier failed restore
         // left behind is evidence, not something this start may clear.
@@ -1604,6 +1609,14 @@ final class SessionManager {
         sleepNotHeld = false
         announcedSleepNotHeld = false
         Log.info("session started until \(iso(new.endsAt)) (\(Int(duration))s requested)")
+        if source == .dailyWindow {
+            let until = new.endsAt.formatted(date: .omitted, time: .shortened)
+            let again = DailyWindow.clockLabel(config.dailyWindowStartMinute)
+            notifier.post(
+                title: "Awake until \(until)",
+                body: "The daily window started a session. End it from the menu bar to pause until \(again)."
+            )
+        }
         await armDeadline(new.endsAt)
         applyAppNapInJournal()
         endRequestedSinceStart = false
@@ -1743,6 +1756,15 @@ final class SessionManager {
         }
         // The app stays to ask, so starts are no longer refused for the quit.
         if reason == .quit, closedLidSleepOwed { quitRequested = false }
+        // Quit must not arm the next morning's session on the way out.
+        // A clean end re-evaluates the daily window: a timer end inside the
+        // hours starts the rest of them, and End now pauses until the next
+        // start so the window does not undo the end.
+        if reason == .quit {
+            cancelDailyWindowCheck()
+        } else if Self.dailyWindowFollows(outcome) {
+            await syncDailyWindow(userStopped: Self.pausesDailyWindow(reason))
+        }
         return outcome
     }
 
@@ -3092,6 +3114,7 @@ final class SessionManager {
         reconcileRetry?.cancel()
         reconcileRetry = nil
         await reconcile(ticket: endTicket, isRetry: false)
+        await syncDailyWindow(userStopped: false)
     }
 
     private func reconcile(ticket: Int, isRetry: Bool) async {
@@ -3686,6 +3709,106 @@ final class SessionManager {
         } catch {
             fail("could not restore session.json after a failed start: \(error.localizedDescription)")
         }
+    }
+
+    /// Ending reasons that opt out of the daily window until its next start.
+    /// A timer end does not: the hours are still in force, and a session the
+    /// window itself started is supposed to finish at the end minute.
+    private static func pausesDailyWindow(_ reason: EndReason) -> Bool {
+        switch reason {
+        case .user, .batteryFloor, .batteryUnreadable, .thermalCritical: true
+        case .timer, .quit, .backstop, .recoveryUnavailable, .startFailed: false
+        }
+    }
+
+    /// The session is gone and a new start is allowed. A locked end, a
+    /// session file that could not be removed, or a pmset still running
+    /// leaves the old session in place.
+    private static func dailyWindowFollows(_ outcome: EndOutcome) -> Bool {
+        switch outcome {
+        case .restored, .incomplete(agentArmed: true): true
+        case .locked, .incomplete(agentArmed: false), .sessionRetained, .journalUnreadable, .privilegedCommandRunning: false
+        }
+    }
+
+    /// Start, pause, or arm the next check for the daily window. No-op when
+    /// the window is off and nothing is scheduled, so a build whose config
+    /// turns it off does not touch the session.
+    func syncDailyWindow(userStopped: Bool = false) async {
+        if !config.dailyWindowEnabled, config.dailyWindowPausedUntil == nil, dailyWindowTimer == nil {
+            return
+        }
+        let decision = DailyWindowPolicy.decide(DailyWindowPolicy.Context(
+            enabled: config.dailyWindowEnabled,
+            window: DailyWindow(startMinute: config.dailyWindowStartMinute, endMinute: config.dailyWindowEndMinute),
+            pausedUntil: config.dailyWindowPausedUntil,
+            sessionActive: session != nil,
+            userStopped: userStopped,
+            now: clock(),
+            calendar: .current,
+            minimumDuration: SessionMath.minimumDuration
+        ))
+        switch decision.pause {
+        case .unchanged:
+            break
+        case .clear:
+            if config.dailyWindowPausedUntil != nil {
+                config.dailyWindowPausedUntil = nil
+                saveDailyWindowConfig()
+            }
+        case let .until(date):
+            if config.dailyWindowPausedUntil != date {
+                config.dailyWindowPausedUntil = date
+                Log.info("daily window: paused until \(iso(date))")
+                saveDailyWindowConfig()
+            }
+        }
+        switch decision.action {
+        case .idle:
+            cancelDailyWindowCheck()
+        case let .check(at: date):
+            armDailyWindowCheck(at: date)
+        case let .start(endsAt: endsAt):
+            cancelDailyWindowCheck()
+            let duration = endsAt.timeIntervalSince(clock())
+            Log.info("daily window: starting a session until \(iso(endsAt))")
+            await start(duration: duration, source: .dailyWindow)
+            if session == nil, config.dailyWindowEnabled {
+                armDailyWindowCheck(at: clock().addingTimeInterval(recoveryRetryDelay))
+            }
+        }
+    }
+
+    private func saveDailyWindowConfig() {
+        do {
+            try store.saveConfig(config)
+        } catch {
+            Log.error("could not save the daily window: \(error.localizedDescription)")
+        }
+    }
+
+    private func armDailyWindowCheck(at date: Date) {
+        if dailyWindowCheckAt == date, dailyWindowTimer != nil { return }
+        dailyWindowTimer?.invalidate()
+        dailyWindowCheckAt = date
+        Log.info("daily window: next check at \(iso(date))")
+        let timer = Timer(fire: date, interval: 0, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.dailyWindowTimer = nil
+                self.dailyWindowCheckAt = nil
+                await self.syncDailyWindow()
+            }
+        }
+        timer.tolerance = 15
+        RunLoop.main.add(timer, forMode: .common)
+        dailyWindowTimer = timer
+    }
+
+    private func cancelDailyWindowCheck() {
+        dailyWindowTimer?.invalidate()
+        dailyWindowTimer = nil
+        dailyWindowCheckAt = nil
     }
 
     /// In-process timers only; the launchd agent is armed by callers before

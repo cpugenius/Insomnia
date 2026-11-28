@@ -41,6 +41,26 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(c.tmuxTargets, [])
         XCTAssertFalse(c.tmuxNudgePressesEnter)
         XCTAssertFalse(c.launchAtLogin)
+        XCTAssertTrue(c.dailyWindowEnabled)
+        XCTAssertEqual(c.dailyWindowStartMinute, 7 * 60)
+        XCTAssertEqual(c.dailyWindowEndMinute, 2 * 60)
+        XCTAssertNil(c.dailyWindowPausedUntil)
+    }
+
+    /// A config.json from before the daily window, or with the key missing,
+    /// gets the 7:00 AM–2:00 AM window. An explicit false stays off.
+    func testDailyWindowDefaultsOnWhenTheKeyIsMissing() throws {
+        let legacy = try Store.makeDecoder().decode(Config.self, from: Data(#"{}"#.utf8))
+        XCTAssertTrue(legacy.dailyWindowEnabled)
+        XCTAssertEqual(legacy.dailyWindowStartMinute, DailyWindow.automaticStart)
+        XCTAssertEqual(legacy.dailyWindowEndMinute, DailyWindow.automaticEnd)
+        XCTAssertNil(legacy.dailyWindowPausedUntil)
+        let off = try Store.makeDecoder().decode(Config.self, from: Data(#"{"dailyWindowEnabled": false, "dailyWindowStartMinute": 900, "dailyWindowEndMinute": 1500}"#.utf8))
+        XCTAssertFalse(off.dailyWindowEnabled)
+        XCTAssertEqual(off.dailyWindowStartMinute, 900)
+        XCTAssertEqual(off.dailyWindowEndMinute, 60)
+        let data = try Store.makeEncoder().encode(off)
+        XCTAssertEqual(try Store.makeDecoder().decode(Config.self, from: data), off)
     }
 
     /// Enter after `continue` is opt-in: a config.json written before the
@@ -642,9 +662,15 @@ final class ConfigLoadTests: XCTestCase {
     // MARK: Lid-close update at launch
 
     /// config.json as an earlier build left it: no lid-close mark.
+    /// The daily window turns on when its key is absent. These fixtures are
+    /// about the lid-close update, so the key is written off and a reconcile
+    /// does not also start a 7:00 AM session.
     private func writeEarlierBuildConfig(_ json: String) throws {
         try h.home.paths.createDirectories()
-        try Data(json.utf8).write(to: h.home.paths.configFile)
+        let parsed = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        var object = try XCTUnwrap(parsed as? [String: Any])
+        object["dailyWindowEnabled"] = false
+        try JSONSerialization.data(withJSONObject: object).write(to: h.home.paths.configFile)
     }
 
     /// The maintainer's upgrade: freeze-all on (saved when it was the
